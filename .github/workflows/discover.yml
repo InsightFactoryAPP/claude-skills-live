@@ -20,11 +20,12 @@ jobs:
       - run: bun run src/cli.ts discover
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: peter-evans/create-pull-request@v7
+      - id: cpr
+        uses: peter-evans/create-pull-request@v7
         with:
           # See refresh.yml: a PR opened with GITHUB_TOKEN gets no CI run at
-          # all, which would leave a human reviewing candidate additions with
-          # no signal about whether they even validate.
+          # all, so validate would never run and the auto-merge below would
+          # never fire.
           token: ${{ secrets.PAT_TOKEN }}
           branch: bot/discover
           branch-suffix: timestamp
@@ -33,8 +34,19 @@ jobs:
             Candidates that cleared the inclusion bar (>=25 stars, not archived,
             not a mirror of proprietary source).
 
-            **Review before merging.** Everything lands as `kind: skill` with empty
-            tags; set the correct kind, add tags, and rewrite any summary that reads
-            as marketing copy.
+            Auto-merges when checks pass. Everything lands as `kind: skill` with
+            empty tags; fix kind/tags/summaries in a follow-up if needed.
           commit-message: "feat: new candidate entries"
-          labels: automated, needs-review
+          labels: automated
+      # Auto-merge only the PR this job just opened: a bot/discover-* branch
+      # authored by the repo owner's PAT. Contributor PRs are never touched.
+      - if: steps.cpr.outputs.pull-request-number != ''
+        run: |
+          read -r author head < <(gh pr view "$PR" --json author,headRefName --jq '"\(.author.login) \(.headRefName)"')
+          if [[ "$author" != "${{ github.repository_owner }}" || "$head" != bot/discover-* ]]; then
+            echo "refusing to auto-merge PR #$PR (author=$author head=$head)"; exit 0
+          fi
+          gh pr merge --squash --auto --delete-branch "$PR"
+        env:
+          PR: ${{ steps.cpr.outputs.pull-request-number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
